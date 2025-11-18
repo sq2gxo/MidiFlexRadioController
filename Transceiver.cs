@@ -1,0 +1,526 @@
+﻿using Flex.Smoothlake.FlexLib;
+using System.Diagnostics;
+
+
+// slice property changed i dodaniu/usuniecie slice A/B -> XIT, DIV, APF i filtry DSP (i WNB??)
+// to samo przy przełączeniu FN1 FN2
+// A FN1: ch1 note 15
+// A FN2: ch1 note 16
+// B FN1: ch2 note 15
+// B FN2: ch2 note 16
+
+// DVK property changed - podswietlenie makra i abort
+
+// SSB CW - separate widgt/shift
+
+
+namespace MidiFlexRadioController
+{
+    enum ConnectionStatus
+    {
+        Connected,
+        Disconnected,
+        Connecting,
+        ConnectionFailed,
+        Disconnecting
+    }
+
+    internal class Transceiver
+    {
+        private readonly object _connectSyncObj = new();
+
+        private readonly List<int> BANDS = [.. new List<int>() { 160, 80, 40, 30, 20, 17, 15, 12, 10, 6 }.OrderBy(x => x)];
+        private readonly List<string> MODES = new List<string>() { "CW", "LSB", "USB" };
+
+        private readonly List<int> CW_FILTERS_WIDTH = [.. new List<int>() { 200, 300, 400, 500, 600 }.OrderBy(x => x)];
+        private readonly int CW_FILTER_DEFAULT_HZ = 400;
+        private readonly int CW_FILTER_VARIABLE_DELTA_HZ = 200;
+        private readonly List<int> CW_TUNE_STEPS = [.. new List<int>() { 5, 50 }.OrderBy(x => x)];
+
+        private readonly List<int> SSB_FILTERS_WIDTH = [.. new List<int>() { 1900, 2100, 2400, 2700 }.OrderBy(x => x)];
+        private readonly int SSB_FILTER_LOW_HZ = 100;
+        private readonly int SSB_FILTER_DEFAULT_HZ = 2100;
+        private readonly int SSB_FILTER_VARIABLE_DELTA_HZ = 400;
+        private readonly List<int> SSB_TUNE_STEPS = [.. new List<int>() { 20, 200 }.OrderBy(x => x)];
+
+        private readonly List<Radio> radios = [];
+        private Radio? activeRadio = null;
+        private bool previousDiversityMuteState = false;
+
+
+        
+
+        public delegate void StatusEventHandler(ConnectionStatus status);
+        public event StatusEventHandler? StatusEvent;
+        public delegate void CommandStateEventHandler(RadioAction action, bool on);
+        public event CommandStateEventHandler? CommandStateEvent;
+        public delegate void TXStateEventHandler(string sliece, bool? isTX);
+        public event TXStateEventHandler? TXStateEvent;
+
+        internal void Setup()
+        {
+            API.RadioAdded += API_RadioAdded;
+            API.RadioRemoved += API_RadioRemoved;
+            API.ProgramName = "MidiFlexRadioController";
+            API.Init();
+        }
+
+        internal void Teardown()
+        {
+            API.RadioAdded -= API_RadioAdded;
+            API.RadioRemoved -= API_RadioRemoved;
+            foreach (var r in radios)
+            {
+                r.Disconnect();
+            }
+            radios.Clear();
+            API.CloseSession();
+        }
+
+        public bool IsConnected()
+        {
+            return activeRadio != null && activeRadio.Connected;
+        }
+
+        public void ProcessCommand(ControlCommand controlCommand)
+        {
+            if (IsConnected() == false)
+            {
+                return;
+            }
+            var client = activeRadio.GuiClients.FirstOrDefault();
+            if (client == null)
+            {
+                return;
+            }
+            Panadapter? p = activeRadio.PanadapterList.FirstOrDefault();
+            if (p == null)
+            {
+                return;
+            }
+            var actionParam = controlCommand.Action.Param;
+            if (actionParam == MidiController.BOTH_SLICES)
+            {
+                ProcessCommand(new ControlCommand(new RadioAction(controlCommand.Action.TrxCommand, "A"), controlCommand.MidiEvent));
+                ProcessCommand(new ControlCommand(new RadioAction(controlCommand.Action.TrxCommand, "B"), controlCommand.MidiEvent));
+                return;
+            }
+
+            Slice? s = null;
+            Slice? divSlice = null;
+            if (actionParam == "A" || actionParam == "B")
+            {
+                s = activeRadio.FindSliceByLetter(actionParam, client.ClientHandle);
+                if (s == null && actionParam == "B"
+                    && (controlCommand.Action.TrxCommand == Command.Volume || controlCommand.Action.TrxCommand == Command.AgcT))
+                {
+                    s = activeRadio.FindSliceByLetter("D", client.ClientHandle);
+                }
+                if (s == null)
+                {
+                    return;
+                }
+                divSlice = s.DiversityOn ? activeRadio.FindSliceByLetter("D", client.ClientHandle) : null;
+            }
+
+            var sliceMode = s?.DemodMode;
+            if (!MODES.Contains(sliceMode))
+            {
+                return;
+            }
+
+            switch (controlCommand.Action.TrxCommand)
+            {
+                case Command.Tune:
+                    {
+                        double step = (s.TuneStep / 1_000_000.0);
+                        double newFreq = controlCommand.MidiEvent.Value < 63 ? s.Freq + step : s.Freq - step;
+                        s.Freq = newFreq;
+                        break;
+                    }
+                case Command.RitXit:
+                    {
+                        var ritStep = sliceMode == "CW" ? 10 : 40;
+                        if (s.XITOn)
+                        {
+                            s.XITFreq = 40 * GetKnobPosition(controlCommand.MidiEvent.Value, 4);
+                        }
+                        else
+                        {
+                            s.RITFreq = ritStep * GetKnobPosition(controlCommand.MidiEvent.Value, 32);
+                            if (s.DiversityOn)
+                            {
+                                activeRadio.FindSliceByIndex(s.DiversityIndex).RITOn = s.RITFreq != 0;
+                            }
+                            s.RITOn = s.RITFreq != 0;
+                        }
+                        break;
+                    }
+                case Command.Volume:
+                    {
+                        var gain = GetKnobPosition(controlCommand.MidiEvent.Value, 0, 100);
+                        s.AudioGain = gain;
+                        break;
+                    }
+                case Command.AgcT:
+                    {
+                        var threshold = GetKnobPosition(controlCommand.MidiEvent.Value, 10, 60);
+                        s.AGCThreshold = threshold;
+                        break;
+                    }
+                case Command.FilterWidth:
+                    {
+                        var defaultWidth = sliceMode == "CW" ? CW_FILTER_DEFAULT_HZ : SSB_FILTER_DEFAULT_HZ;
+                        var widthDelta = sliceMode == "CW" ? CW_FILTER_VARIABLE_DELTA_HZ : SSB_FILTER_VARIABLE_DELTA_HZ;
+                        if (sliceMode == "CW")
+                        {
+                            var halfWidth = defaultWidth / 2;
+                            halfWidth += (widthDelta * GetKnobPosition(controlCommand.MidiEvent.Value, 8)) / (2 * 8);
+                            s.UpdateFilter(-halfWidth, halfWidth);
+                        }
+                        else if (sliceMode == "USB")
+                        {
+                            s.UpdateFilter(SSB_FILTER_LOW_HZ, SSB_FILTER_LOW_HZ + defaultWidth + (widthDelta * GetKnobPosition(controlCommand.MidiEvent.Value, 8)) / 8);
+                        }
+                        else
+                        {
+                            s.UpdateFilter(-(SSB_FILTER_LOW_HZ + defaultWidth + (widthDelta * GetKnobPosition(controlCommand.MidiEvent.Value, 8)) / 8), -SSB_FILTER_LOW_HZ);
+                        }
+                        break;
+                    }
+                case Command.ZoomPanadapter:
+                    {
+                        var level = GetKnobPosition(controlCommand.MidiEvent.Value, 100, 16);
+                        p.Bandwidth = level * level / 100_000.0;
+                        break;
+                    }
+
+                //
+                // BUTTONS
+                //
+                case Command.Diversity:
+                    {
+                        s.DiversityOn = !s.DiversityOn;
+                        CommandStateEvent?.Invoke(controlCommand.Action, s.DiversityOn);
+                        break;
+                    }
+                case Command.CenterSlice:
+                    {
+                        var centerFreq = s.Freq;
+                        if (sliceMode== "USB")
+                        {
+                            centerFreq += s.FilterHigh / 2_000_000.0;
+                        }
+                        else if (sliceMode == "LSB")
+                        {
+                            centerFreq += s.FilterLow / 2_000_000.0;
+                        }
+                        p.CenterFreq = centerFreq;
+                        break;
+                    }
+                case Command.XitOnOff:
+                    {
+                        s.XITOn = !s.XITOn;
+                        CommandStateEvent?.Invoke(controlCommand.Action, s.XITOn);
+                        break;
+                    }
+                case Command.APF:
+                    {
+                        s.APFOn = !s.APFOn;
+                        CommandStateEvent?.Invoke(controlCommand.Action, s.APFOn);
+                        break;
+                    }
+                case Command.Step:
+                    {
+                        s.TuneStep = FindClosestBiggerValue(s.TuneStep, getModesTuneSteps(sliceMode));
+                        break;
+                    }
+                case Command.FilterWider:
+                case Command.FilterNarrower:
+                    {
+                        var newWidth = controlCommand.Action.TrxCommand == Command.FilterWider
+                            ? FindClosestBiggerValue(s.FilterHigh - s.FilterLow, getModesFilterWidths(sliceMode), false)
+                            : FindClosestSmallerValue(s.FilterHigh - s.FilterLow, getModesFilterWidths(sliceMode), false);
+                        if (sliceMode == "CW")
+                        {
+                            var halfWidth = newWidth / 2;
+                            s.UpdateFilter(-halfWidth, halfWidth);
+                        }
+                        else if (sliceMode == "USB")
+                        {
+                            s.UpdateFilter(SSB_FILTER_LOW_HZ, newWidth + SSB_FILTER_LOW_HZ);
+                        }
+                        else
+                        {
+                            s.UpdateFilter(-(newWidth + SSB_FILTER_LOW_HZ), -SSB_FILTER_LOW_HZ);
+                        }
+                        break;
+                    }
+                case Command.DVK:
+                    {
+                        var dvkNumber = actionParam;
+                        if (int.TryParse(dvkNumber, out int dvkIdx) == false)
+                        {
+                            Debug.WriteLine($"Invalid DVK number: {dvkNumber}");
+                            break;
+                        }
+                        activeRadio.DVK.SendCommand(new DVKCommand(DVKCommandType.StartPlayback, (uint?)dvkIdx, ""));
+                        break;
+                    }
+                case Command.Mode:
+                    {
+                        s.DemodMode = sliceMode == "CW" ? SSBModeFromFreq(s.Freq) : "CW";
+                        break;
+                    }
+                case Command.BandDown:
+                    {
+                        Int32.TryParse(p.Band, out int currentBand);
+                        p.Band = FindClosestBiggerValue(currentBand, BANDS).ToString();
+                        break;
+                    }
+                case Command.BandUp:
+                    {
+                        Int32.TryParse(p.Band, out int currentBand);
+                        p.Band = FindClosestSmallerValue(currentBand, BANDS).ToString();
+                        break;
+                    }
+                case Command.ATU:
+                    {
+                        if (activeRadio.ATUTuneStatus == ATUTuneStatus.ManualBypass || activeRadio.ATUTuneStatus == ATUTuneStatus.Bypass)
+                        {
+                            activeRadio.ATUTuneStart();
+                            CommandStateEvent?.Invoke(controlCommand.Action, true);
+                        } else
+                        {
+                            activeRadio.ATUTuneBypass();
+                            CommandStateEvent?.Invoke(controlCommand.Action, false);
+                        }
+                        break;
+                    }
+                default:
+                    Debug.WriteLine($"Unsupported command: {controlCommand.Action.TrxCommand}");
+                    break;
+            }
+        }
+
+        private List<int> getModesFilterWidths(string mode)
+        {
+            return mode == "CW" ? CW_FILTERS_WIDTH : SSB_FILTERS_WIDTH;
+        }
+
+        private List<int> getModesTuneSteps(string mode)
+        {
+            return mode == "CW" ? CW_TUNE_STEPS : SSB_TUNE_STEPS;
+        }
+
+        private static string SSBModeFromFreq(double freq)
+        {
+            return freq > 10 ? "USB" : "LSB";
+        }
+
+        private static int FindClosestBiggerValue(int currentValue, List<int> availableValues)
+        {
+            return FindClosestBiggerValue(currentValue, availableValues, true);
+        }
+
+        private static int FindClosestBiggerValue(int currentValue, List<int> availableValues, bool rotate)
+        {
+            if (!rotate && currentValue >= availableValues.Last())
+            {
+                return availableValues.Last();
+            }
+            return availableValues.SkipWhile(p => p <= currentValue).FirstOrDefault(availableValues.First());
+        }
+
+        private static int FindClosestSmallerValue(int currentValue, List<int> availableValues)
+        {
+            return FindClosestSmallerValue(currentValue, availableValues, true);
+        }
+
+        private static int FindClosestSmallerValue(int currentValue, List<int> availableValues, bool rotate)
+        {
+            if (!rotate && currentValue <= availableValues.First())
+            {
+                return availableValues.First();
+            }
+            return availableValues.TakeWhile(p => p < currentValue).LastOrDefault(availableValues.Last());
+        }
+
+        private static int GetKnobPosition(int value, int steps)
+        {
+            // value 0 - 127, center value 64
+            if (value == 127)
+            {
+                value = 128;
+            }
+            return steps * (value - 64) / 64;
+        }
+        private static int GetKnobPosition(int value, int left, int right)
+        {
+            return left + (right - left) * value / 127;
+        }
+
+
+        private void API_RadioAdded(Radio radio)
+        {
+            radios.Add(radio);
+            Console.WriteLine($"Radio added: {radio.Nickname} {radio.Callsign}");
+            var compName = System.Environment.GetEnvironmentVariable("COMPUTERNAME");
+            foreach (var client in radio.GuiClients)
+            {
+                string clientInfoMessage = $"Existing GUI Client: {client.Program} {client.Station}";
+                Debug.WriteLine(clientInfoMessage);
+                if (client.Station == compName)
+                {
+                    activateRadio(radio);
+                }
+            }
+            radio.GUIClientAdded += (client) =>
+            {
+                string clientInfoMessage = $"New GUI Client added: {client.Program} {client.Station} Radio: {radio.Nickname}";
+                Debug.WriteLine(clientInfoMessage);
+                if (client.Station == compName)
+                {
+                    activateRadio(radio);
+                }
+            };
+            radio.GUIClientRemoved += (client) =>
+            {
+                string clientInfoMessage = $"GUI Client removed: {client.Program} {client.Station} Radio: {radio.Nickname}";
+                Debug.WriteLine(clientInfoMessage);
+                if (client.Station == compName)
+                {
+                    deactivateRadio(radio);
+                }
+            };
+        }
+
+        private void API_RadioRemoved(Radio radio)
+        {
+            radios.Remove(radio);
+            Debug.WriteLine($"Radio removed: {radio.Nickname} {radio.Callsign}");
+        }
+
+        private void activateRadio(Radio radio)
+        {
+            lock (_connectSyncObj)
+            {
+                if (this.activeRadio == null)
+                {
+                    this.activeRadio = radio;
+                    radio.SliceAdded += new Radio.SliceAddedEventHandler(radio_SliceAdded);
+                    radio.SliceRemoved += new Radio.SliceRemovedEventHandler(radio_SliceRemoved);
+                    radio.PanadapterAdded += new Radio.PanadapterAddedEventHandler(radio_PanadapterAdded);
+                    radio.PanadapterRemoved += new Radio.PanadapterRemovedEventHandler(radio_PanadapterRemoved);
+                    radio.PropertyChanged += radio_PropertyChanged;
+                    if (this.activeRadio.Connect())
+                    {
+                        this.activeRadio = radio;
+                        Debug.WriteLine("Connected to radio {radio}.");
+                        StatusEvent?.Invoke(ConnectionStatus.Connected);
+                    }
+                    else
+                    {
+                        Debug.WriteLine("Failed to connect to radio.");
+                        StatusEvent?.Invoke(ConnectionStatus.ConnectionFailed);
+                    }
+                }
+            }
+        }
+
+        private void deactivateRadio(Radio radio)
+        {
+            lock (_connectSyncObj)
+            {
+                if (this.activeRadio == radio)
+                {
+                    this.activeRadio = null;
+                    radio.Disconnect();
+                    radio.PropertyChanged -= radio_PropertyChanged;
+                    radio.SliceAdded -= radio_SliceAdded;
+                    radio.SliceRemoved -= radio_SliceRemoved;
+                    radio.PanadapterAdded -= radio_PanadapterAdded;
+                    radio.PanadapterRemoved -= radio_PanadapterRemoved;
+                    Debug.WriteLine($"Disconnected from radio {radio.Nickname}.");
+                    StatusEvent?.Invoke(ConnectionStatus.Disconnected);
+                }
+            }
+        }
+
+
+        private void radio_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == "Mox")
+            {
+                var sliceLetter = activeRadio?.SliceList.Find(s => s.IsTransmitSlice)?.Letter;
+                bool isTX = (bool)(activeRadio?.Mox);
+                Debug.WriteLine($"MOX changed: {isTX} {sliceLetter}");
+                if (sliceLetter == "A" || sliceLetter == "B")
+                {
+                    TXStateEvent?.Invoke(sliceLetter, isTX);
+                }
+            }
+        }
+
+        private void radio_PanadapterRemoved(Panadapter pan)
+        {
+            Debug.WriteLine($"Panadapter removed: {pan.CenterFreq} Hz");
+        }
+
+        private void radio_PanadapterAdded(Panadapter pan, Waterfall fall)
+        {
+            Debug.WriteLine($"Panadapter added: {pan.CenterFreq} Hz");
+        }
+
+        private void radio_SliceRemoved(Slice slc)
+        {
+            slc.PropertyChanged -= slice_PropertyChanged;
+            Debug.WriteLine($"Slice removed: {slc.Letter}");
+            if (slc.Letter == "B")
+            {
+                // unmute diversity slice
+                var client = activeRadio?.GuiClients.FirstOrDefault();
+                if (client != null)
+                {
+                    var diversitySlice = activeRadio.FindSliceByLetter("D", client.ClientHandle);
+                    if (diversitySlice != null)
+                    {
+                        diversitySlice.Mute = previousDiversityMuteState;
+                    }
+                }
+            }
+            TXStateEvent?.Invoke(slc.Letter, null);
+        }
+
+        private void radio_SliceAdded(Slice slc)
+        {
+            slc.PropertyChanged += slice_PropertyChanged;
+            Debug.WriteLine($"Slice added: {slc.Letter}");
+            if (slc.Letter == "B")
+            {
+                // unmute diversity slice
+                var client = activeRadio?.GuiClients.FirstOrDefault();
+                if (client != null)
+                {
+                    var diversitySlice = activeRadio.FindSliceByLetter("D", client.ClientHandle);
+                    if (diversitySlice != null)
+                    {
+                        previousDiversityMuteState = diversitySlice.Mute;
+                        diversitySlice.Mute = true;
+                    }
+                }
+            }
+            TXStateEvent?.Invoke(slc.Letter, false);
+        }
+
+        private void slice_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (sender is Slice)
+            {
+                Debug.WriteLine(e.PropertyName);
+                Debug.WriteLine(((Slice)sender).Letter);
+                // TODO - mute D if B was unmuted and vice versa
+            }
+        }
+    }
+}
