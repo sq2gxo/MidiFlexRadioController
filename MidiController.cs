@@ -14,33 +14,40 @@ namespace MidiFlexRadioController
 
         private readonly Dictionary<MidiControl, RadioAction> noteMapping = new()
         {
-            { new MidiControl(1, 5), new RadioAction(Command.Diversity, "A") },
-            { new MidiControl(2, 5), new RadioAction(Command.ATU, "") },
-            { new MidiControl(1, 6), new RadioAction(Command.XitOnOff, "A") },
-            { new MidiControl(2, 6), new RadioAction(Command.XitOnOff, "B") },
+            { new MidiControl(1, 5), new RadioAction(Command.XitOnOff, "A") },
+            { new MidiControl(2, 5), new RadioAction(Command.XitOnOff, "B") },
+            { new MidiControl(1, 6), new RadioAction(Command.Diversity, "A") },
+            { new MidiControl(2, 6), new RadioAction(Command.ATU, "") },
             { new MidiControl(1, 7), new RadioAction(Command.CenterSlice, "A") },
             { new MidiControl(2, 7), new RadioAction(Command.CenterSlice, "B") },
             { new MidiControl(1, 8), new RadioAction(Command.CenterSlice, "A") },
             { new MidiControl(2, 8), new RadioAction(Command.CenterSlice, "B") },
+
             { new MidiControl(6, 0), new RadioAction(Command.FilterNarrower, "A") }, // (1) 1 button (HOT CUE active)
             { new MidiControl(6, 1), new RadioAction(Command.FilterWider, "A") },    // (1) 2 button (HOT CUE active)
-            { new MidiControl(6, 2), new RadioAction(Command.APF, "A") },            // (1) 3 button (HOT CUE active)    
+            { new MidiControl(6, 2), new RadioAction(Command.APF_ANF, "A") },        // (1) 3 button (HOT CUE active)    
+            { new MidiControl(6, 3), new RadioAction(Command.Mute, "A") },           // (1) 4 button (HOT CUE active)
             { new MidiControl(7, 0), new RadioAction(Command.FilterNarrower, "B") }, // (2) 1 button (HOT CUE active)
             { new MidiControl(7, 1), new RadioAction(Command.FilterWider, "B") },    // (2) 2 button (HOT CUE active)
-            { new MidiControl(7, 2), new RadioAction(Command.APF, "B") },            // (2) 3 button (HOT CUE active)
+            { new MidiControl(7, 2), new RadioAction(Command.APF_ANF, "B") },        // (2) 3 button (HOT CUE active)
+            { new MidiControl(7, 3), new RadioAction(Command.Mute, "B") },           // (2) 4 button (HOT CUE active)
 
-            { new MidiControl(6, 18), new RadioAction(Command.DVK, "1") }, // (1) 3 button (LOOP active)
-            { new MidiControl(6, 19), new RadioAction(Command.DVK, "2") }, // (1) 4 button (LOOP active)
-            { new MidiControl(7, 18), new RadioAction(Command.DVK, "3") }, // (2) 3 button (LOOP active)
-            { new MidiControl(7, 19), new RadioAction(Command.DVK, "4") }, // (2) 4 button (LOOP active)
+            { new MidiControl(6, 16), new RadioAction(Command.DVK, "1") }, // (1) 1 button (LOOP active)
+            { new MidiControl(6, 17), new RadioAction(Command.DVK, "2") }, // (1) 2 button (LOOP active)
+            { new MidiControl(6, 18), new RadioAction(Command.WNB, "A") }, // (1) 3 button (LOOP active)
+            { new MidiControl(6, 19), new RadioAction(Command.Mute, "A") },// (1) 4 button (LOOP active)
+            { new MidiControl(7, 16), new RadioAction(Command.DVK, "1") }, // (2) 1 button (LOOP active)
+            { new MidiControl(7, 17), new RadioAction(Command.DVK, "2") }, // (2) 2 button (LOOP active)
+            { new MidiControl(7, 18), new RadioAction(Command.WNB, "B") }, // (2) 3 button (LOOP active)
+            { new MidiControl(7, 19), new RadioAction(Command.Mute, "B") },// (2) 4 button (LOOP active)
 
             { new MidiControl(1, 3), new RadioAction(Command.Mode, BOTH_SLICES) }, // VINYL button - Mode change for both slices
-            { new MidiControl(1, 12), new RadioAction(Command.BandUp, "") }, // left "headphones" button
-            { new MidiControl(0, 3), new RadioAction(Command.BandDown, "") }, // SHIFT button
-            { new MidiControl(2, 12), new RadioAction(Command.Step, BOTH_SLICES) },   // right "headphones" button
+            { new MidiControl(1, 12), new RadioAction(Command.BandUp, "A") }, // left "headphones" button
+            { new MidiControl(0, 3), new RadioAction(Command.BandDown, "A") }, // SHIFT button
+            { new MidiControl(2, 12), new RadioAction(Command.Step, BOTH_SLICES) },   // right "headphones" button            
         };
 
-        private readonly Dictionary<RadioAction, MidiControl> commandToNote;
+        private readonly Dictionary<RadioAction, List<MidiControl>> commandToNotes;
 
         private readonly Dictionary<MidiControl, RadioAction> ccMapping = new()
         {
@@ -56,7 +63,7 @@ namespace MidiFlexRadioController
             { new MidiControl(2, 2), new RadioAction(Command.FilterWidth, "B") },
             { new MidiControl(1, 1), new RadioAction(Command.FilterShift, "A") },
             { new MidiControl(2, 1), new RadioAction(Command.FilterShift, "B") },
-            { new MidiControl(0, 0), new RadioAction(Command.ZoomPanadapter, "A") }
+            { new MidiControl(0, 0), new RadioAction(Command.ZoomPanadapter, "A") },
         };
 
         public delegate void ControlCommandEventHandler(ControlCommand command);
@@ -64,10 +71,9 @@ namespace MidiFlexRadioController
 
         internal MidiController()
         {
-            commandToNote = noteMapping
+            commandToNotes = noteMapping
                 .GroupBy(kvp => kvp.Value)
-                .Select(kvp => kvp.First())
-                .ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+                .ToDictionary(g => g.Key, g => g.Select(kvp => kvp.Key).ToList());
         }
 
         internal void Setup(string deviceName)
@@ -164,9 +170,12 @@ namespace MidiFlexRadioController
 
         public void LightActionButton(RadioAction action, bool on)
         {
-            if (commandToNote.TryGetValue(action, out MidiControl? button))
+            if (commandToNotes.TryGetValue(action, out List<MidiControl>? buttons))
             {
-                LightButton(button, on);
+                foreach (var b in buttons)
+                {
+                    LightButton(b, on);
+                }                
             }
         }
 

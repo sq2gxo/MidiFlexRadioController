@@ -11,11 +11,13 @@ using System.Diagnostics;
 
 // DVK property changed - podswietlenie makra i abort
 
-// SSB CW - separate widgt/shift
+// SSB CW - separate width/shift
+// No XIT in SSB
 
 
 namespace MidiFlexRadioController
 {
+    internal record ConnectionInfo(ConnectionStatus Status, string RadioLabel);
     enum ConnectionStatus
     {
         Connected,
@@ -30,7 +32,19 @@ namespace MidiFlexRadioController
         private readonly object _connectSyncObj = new();
 
         private readonly List<int> BANDS = [.. new List<int>() { 160, 80, 40, 30, 20, 17, 15, 12, 10, 6 }.OrderBy(x => x)];
-        private readonly List<string> MODES = new List<string>() { "CW", "LSB", "USB" };
+        private readonly List<string> BASE_MODES = new List<string>() { "CW", "LSB", "USB" };
+        private readonly List<Command> BASE_MODES_ONLY_COMMANDS = new List<Command>()
+        {
+            Command.APF_ANF,
+            Command.DVK,
+            Command.FilterNarrower,
+            Command.FilterWider,
+            Command.FilterWidth,
+            Command.FilterShift,
+            Command.RitXit,
+            Command.Step,
+            Command.XitOnOff,
+        };
 
         private readonly List<int> CW_FILTERS_WIDTH = [.. new List<int>() { 200, 300, 400, 500, 600 }.OrderBy(x => x)];
         private readonly int CW_FILTER_DEFAULT_HZ = 400;
@@ -45,17 +59,15 @@ namespace MidiFlexRadioController
 
         private readonly List<Radio> radios = [];
         private Radio? activeRadio = null;
-        private bool previousDiversityMuteState = false;
+        private TrxEventsHandler? radioHandler;
 
-
-        
-
-        public delegate void StatusEventHandler(ConnectionStatus status);
+        public delegate void StatusEventHandler(ConnectionInfo connectionInfo);
         public event StatusEventHandler? StatusEvent;
         public delegate void CommandStateEventHandler(RadioAction action, bool on);
         public event CommandStateEventHandler? CommandStateEvent;
         public delegate void TXStateEventHandler(string sliece, bool? isTX);
         public event TXStateEventHandler? TXStateEvent;
+
 
         internal void Setup()
         {
@@ -67,6 +79,7 @@ namespace MidiFlexRadioController
 
         internal void Teardown()
         {
+            radioHandler?.Teardown();
             API.RadioAdded -= API_RadioAdded;
             API.RadioRemoved -= API_RadioRemoved;
             foreach (var r in radios)
@@ -86,50 +99,54 @@ namespace MidiFlexRadioController
         {
             if (IsConnected() == false)
             {
+                Debug.WriteLine("WARN: Radio disconected!");
                 return;
             }
             var client = activeRadio.GuiClients.FirstOrDefault();
             if (client == null)
             {
-                return;
-            }
-            Panadapter? p = activeRadio.PanadapterList.FirstOrDefault();
-            if (p == null)
-            {
+                Debug.WriteLine("WARN: client is null!");
                 return;
             }
             var actionParam = controlCommand.Action.Param;
+            var trxCommand = controlCommand.Action.TrxCommand;
             if (actionParam == MidiController.BOTH_SLICES)
             {
-                ProcessCommand(new ControlCommand(new RadioAction(controlCommand.Action.TrxCommand, "A"), controlCommand.MidiEvent));
-                ProcessCommand(new ControlCommand(new RadioAction(controlCommand.Action.TrxCommand, "B"), controlCommand.MidiEvent));
+                ProcessCommand(new ControlCommand(new RadioAction(trxCommand, "A"), controlCommand.MidiEvent));
+                ProcessCommand(new ControlCommand(new RadioAction(trxCommand, "B"), controlCommand.MidiEvent));
                 return;
             }
 
             Slice? s = null;
             Slice? divSlice = null;
+            string? sliceMode = null;
+            Panadapter? p = null;
             if (actionParam == "A" || actionParam == "B")
             {
                 s = activeRadio.FindSliceByLetter(actionParam, client.ClientHandle);
                 if (s == null && actionParam == "B"
-                    && (controlCommand.Action.TrxCommand == Command.Volume || controlCommand.Action.TrxCommand == Command.AgcT))
+                    && (trxCommand == Command.Volume || trxCommand == Command.AgcT))
                 {
                     s = activeRadio.FindSliceByLetter("D", client.ClientHandle);
                 }
                 if (s == null)
                 {
+                    Debug.WriteLine($"Slice {actionParam} not found, will not execute [{trxCommand}]");
                     return;
                 }
                 divSlice = s.DiversityOn ? activeRadio.FindSliceByLetter("D", client.ClientHandle) : null;
+                p = s.Panadapter;
+
+                sliceMode = s?.DemodMode;
+                if (sliceMode == null || (!BASE_MODES.Contains(sliceMode) && BASE_MODES_ONLY_COMMANDS.Contains(trxCommand)))
+                {
+                    Debug.WriteLine($"[{trxCommand}] cannot be executed for mode {sliceMode}");
+                    return;
+                }
             }
 
-            var sliceMode = s?.DemodMode;
-            if (!MODES.Contains(sliceMode))
-            {
-                return;
-            }
 
-            switch (controlCommand.Action.TrxCommand)
+            switch (trxCommand)
             {
                 case Command.Tune:
                     {
@@ -143,11 +160,11 @@ namespace MidiFlexRadioController
                         var ritStep = sliceMode == "CW" ? 10 : 40;
                         if (s.XITOn)
                         {
-                            s.XITFreq = 40 * GetKnobPosition(controlCommand.MidiEvent.Value, 4);
+                            s.XITFreq = - 40 * GetKnobPosition(controlCommand.MidiEvent.Value, 4);
                         }
                         else
                         {
-                            s.RITFreq = ritStep * GetKnobPosition(controlCommand.MidiEvent.Value, 32);
+                            s.RITFreq = - ritStep * GetKnobPosition(controlCommand.MidiEvent.Value, 32);
                             if (s.DiversityOn)
                             {
                                 activeRadio.FindSliceByIndex(s.DiversityIndex).RITOn = s.RITFreq != 0;
@@ -158,13 +175,13 @@ namespace MidiFlexRadioController
                     }
                 case Command.Volume:
                     {
-                        var gain = GetKnobPosition(controlCommand.MidiEvent.Value, 0, 100);
+                        var gain = GetKnobPosition(controlCommand.MidiEvent.Value, 0, 100, 1);
                         s.AudioGain = gain;
                         break;
                     }
                 case Command.AgcT:
                     {
-                        var threshold = GetKnobPosition(controlCommand.MidiEvent.Value, 10, 60);
+                        var threshold = GetKnobPosition(controlCommand.MidiEvent.Value, 5, 70, 1);
                         s.AGCThreshold = threshold;
                         break;
                     }
@@ -188,9 +205,34 @@ namespace MidiFlexRadioController
                         }
                         break;
                     }
+                case Command.FilterShift:
+                    var shiftMaxHz = sliceMode == "CW" ? 150 : 300;
+                    var shiftHz = GetKnobPosition(controlCommand.MidiEvent.Value, -shiftMaxHz, shiftMaxHz, 40);
+                    var filterWidth = s.FilterHigh - s.FilterLow;
+                    if (sliceMode == "CW")
+                    {
+                        var halfWidth = filterWidth / 2;
+                        s.UpdateFilter(-halfWidth + shiftHz, halfWidth + shiftHz);
+                    }
+                    else if (sliceMode == "USB" || sliceMode == "LSB")
+                    {
+                        if (SSB_FILTER_LOW_HZ + shiftHz > 0) { 
+                            var filterLow = SSB_FILTER_LOW_HZ + shiftHz;
+                            var filterHigh = SSB_FILTER_LOW_HZ + filterWidth + shiftHz;
+                            if (sliceMode == "USB")
+                            {
+                                s.UpdateFilter(filterLow, filterHigh);
+                            }
+                            else
+                            {
+                                s.UpdateFilter(-filterHigh, -filterLow);
+                            }
+                        }
+                    }
+                    break;
                 case Command.ZoomPanadapter:
                     {
-                        var level = GetKnobPosition(controlCommand.MidiEvent.Value, 100, 16);
+                        var level = GetKnobPosition(controlCommand.MidiEvent.Value, 100, 16, 2);
                         p.Bandwidth = level * level / 100_000.0;
                         break;
                     }
@@ -221,13 +263,17 @@ namespace MidiFlexRadioController
                 case Command.XitOnOff:
                     {
                         s.XITOn = !s.XITOn;
-                        CommandStateEvent?.Invoke(controlCommand.Action, s.XITOn);
                         break;
                     }
-                case Command.APF:
+                case Command.APF_ANF:
                     {
-                        s.APFOn = !s.APFOn;
-                        CommandStateEvent?.Invoke(controlCommand.Action, s.APFOn);
+                        if (sliceMode == "CW")
+                        {
+                            s.APFOn = !s.APFOn;
+                        } else if (sliceMode == "LSB" || sliceMode == "USB")
+                        {
+                            s.ANFOn = !s.ANFOn;
+                        }
                         break;
                     }
                 case Command.Step:
@@ -238,7 +284,7 @@ namespace MidiFlexRadioController
                 case Command.FilterWider:
                 case Command.FilterNarrower:
                     {
-                        var newWidth = controlCommand.Action.TrxCommand == Command.FilterWider
+                        var newWidth = trxCommand == Command.FilterWider
                             ? FindClosestBiggerValue(s.FilterHigh - s.FilterLow, getModesFilterWidths(sliceMode), false)
                             : FindClosestSmallerValue(s.FilterHigh - s.FilterLow, getModesFilterWidths(sliceMode), false);
                         if (sliceMode == "CW")
@@ -264,7 +310,30 @@ namespace MidiFlexRadioController
                             Debug.WriteLine($"Invalid DVK number: {dvkNumber}");
                             break;
                         }
-                        activeRadio.DVK.SendCommand(new DVKCommand(DVKCommandType.StartPlayback, (uint?)dvkIdx, ""));
+                        // get active slice mode
+                        var txSlice = activeRadio.SliceList.Find(s => s.IsTransmitSlice);
+                        if (txSlice == null)
+                        {
+                            Debug.WriteLine("Transmit slice not found, ignoring DVK command");
+                        }
+                        var txMode = txSlice.DemodMode;
+                        var isTX = activeRadio.Mox;
+                        if (txMode == "USB" || txMode == "LSB")
+                        {
+                            activeRadio.DVK.SendCommand(new DVKCommand(DVKCommandType.StopPlayback, (uint?)dvkIdx, ""));
+                            if (!isTX)
+                            {
+                                activeRadio.DVK.SendCommand(new DVKCommand(DVKCommandType.StartPlayback, (uint?)dvkIdx, ""));
+                            }
+                        } else if (txMode == "CW")
+                        {
+                            //do not send message if radio is currently transmitting - cancel request
+                            activeRadio.GetCWX().ClearBuffer();
+                            if (!isTX)
+                            {
+                                activeRadio.GetCWX().SendMacro(dvkIdx);
+                            }
+                        }
                         break;
                     }
                 case Command.Mode:
@@ -275,13 +344,13 @@ namespace MidiFlexRadioController
                 case Command.BandDown:
                     {
                         Int32.TryParse(p.Band, out int currentBand);
-                        p.Band = FindClosestBiggerValue(currentBand, BANDS).ToString();
+                        s.Panadapter.Band = FindClosestBiggerValue(currentBand, BANDS).ToString();
                         break;
                     }
                 case Command.BandUp:
                     {
                         Int32.TryParse(p.Band, out int currentBand);
-                        p.Band = FindClosestSmallerValue(currentBand, BANDS).ToString();
+                        s.Panadapter.Band = FindClosestSmallerValue(currentBand, BANDS).ToString();
                         break;
                     }
                 case Command.ATU:
@@ -297,10 +366,21 @@ namespace MidiFlexRadioController
                         }
                         break;
                     }
+                case Command.Mute:
+                    s.Mute = !s.Mute;
+                    break;
+                case Command.WNB:
+                    s.WNBOn = !s.WNBOn;
+                    break;
                 default:
-                    Debug.WriteLine($"Unsupported command: {controlCommand.Action.TrxCommand}");
+                    Debug.WriteLine($"Unsupported command: {trxCommand}");
                     break;
             }
+        }
+
+        private bool isBaseMode(string? mode)
+        {
+            return mode != null && BASE_MODES.Contains(mode);
         }
 
         private List<int> getModesFilterWidths(string mode)
@@ -346,18 +426,23 @@ namespace MidiFlexRadioController
             return availableValues.TakeWhile(p => p < currentValue).LastOrDefault(availableValues.Last());
         }
 
-        private static int GetKnobPosition(int value, int steps)
+        private static int GetKnobPosition(int value, int stepsNo)
         {
             // value 0 - 127, center value 64
             if (value == 127)
             {
                 value = 128;
             }
-            return steps * (value - 64) / 64;
+            return stepsNo * (value - 64) / 64;
         }
-        private static int GetKnobPosition(int value, int left, int right)
+        private static int GetKnobPosition(int value, int left, int right, int stepWidth)
         {
-            return left + (right - left) * value / 127;
+            if (value == 127)
+            {
+                value = 128;
+            }
+            var resultNotRounded = left + (right - left) * value / 127;
+            return stepWidth * (resultNotRounded / stepWidth);
         }
 
 
@@ -372,7 +457,7 @@ namespace MidiFlexRadioController
                 Debug.WriteLine(clientInfoMessage);
                 if (client.Station == compName)
                 {
-                    activateRadio(radio);
+                    ActivateRadio(radio);
                 }
             }
             radio.GUIClientAdded += (client) =>
@@ -381,7 +466,7 @@ namespace MidiFlexRadioController
                 Debug.WriteLine(clientInfoMessage);
                 if (client.Station == compName)
                 {
-                    activateRadio(radio);
+                    ActivateRadio(radio);
                 }
             };
             radio.GUIClientRemoved += (client) =>
@@ -390,7 +475,7 @@ namespace MidiFlexRadioController
                 Debug.WriteLine(clientInfoMessage);
                 if (client.Station == compName)
                 {
-                    deactivateRadio(radio);
+                    DeactivateRadio(radio);
                 }
             };
         }
@@ -401,34 +486,30 @@ namespace MidiFlexRadioController
             Debug.WriteLine($"Radio removed: {radio.Nickname} {radio.Callsign}");
         }
 
-        private void activateRadio(Radio radio)
+        private void ActivateRadio(Radio radio)
         {
             lock (_connectSyncObj)
             {
-                if (this.activeRadio == null)
+                if (activeRadio == null)
                 {
-                    this.activeRadio = radio;
-                    radio.SliceAdded += new Radio.SliceAddedEventHandler(radio_SliceAdded);
-                    radio.SliceRemoved += new Radio.SliceRemovedEventHandler(radio_SliceRemoved);
-                    radio.PanadapterAdded += new Radio.PanadapterAddedEventHandler(radio_PanadapterAdded);
-                    radio.PanadapterRemoved += new Radio.PanadapterRemovedEventHandler(radio_PanadapterRemoved);
-                    radio.PropertyChanged += radio_PropertyChanged;
-                    if (this.activeRadio.Connect())
+                    if (radio?.Connect() == true)
                     {
                         this.activeRadio = radio;
                         Debug.WriteLine("Connected to radio {radio}.");
-                        StatusEvent?.Invoke(ConnectionStatus.Connected);
+                        StatusEvent?.Invoke(new ConnectionInfo(ConnectionStatus.Connected, $"{radio.Callsign} {radio.Nickname}"));                        
+                        this.activeRadio = radio;
+                        this.radioHandler = new TrxEventsHandler(radio, TXStateEvent, CommandStateEvent);
                     }
                     else
                     {
                         Debug.WriteLine("Failed to connect to radio.");
-                        StatusEvent?.Invoke(ConnectionStatus.ConnectionFailed);
+                        StatusEvent?.Invoke(new ConnectionInfo(ConnectionStatus.ConnectionFailed, ""));
                     }
                 }
             }
         }
 
-        private void deactivateRadio(Radio radio)
+        private void DeactivateRadio(Radio radio)
         {
             lock (_connectSyncObj)
             {
@@ -436,90 +517,9 @@ namespace MidiFlexRadioController
                 {
                     this.activeRadio = null;
                     radio.Disconnect();
-                    radio.PropertyChanged -= radio_PropertyChanged;
-                    radio.SliceAdded -= radio_SliceAdded;
-                    radio.SliceRemoved -= radio_SliceRemoved;
-                    radio.PanadapterAdded -= radio_PanadapterAdded;
-                    radio.PanadapterRemoved -= radio_PanadapterRemoved;
                     Debug.WriteLine($"Disconnected from radio {radio.Nickname}.");
-                    StatusEvent?.Invoke(ConnectionStatus.Disconnected);
+                    StatusEvent?.Invoke(new ConnectionInfo(ConnectionStatus.Disconnected, ""));
                 }
-            }
-        }
-
-
-        private void radio_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-        {
-            if (e.PropertyName == "Mox")
-            {
-                var sliceLetter = activeRadio?.SliceList.Find(s => s.IsTransmitSlice)?.Letter;
-                bool isTX = (bool)(activeRadio?.Mox);
-                Debug.WriteLine($"MOX changed: {isTX} {sliceLetter}");
-                if (sliceLetter == "A" || sliceLetter == "B")
-                {
-                    TXStateEvent?.Invoke(sliceLetter, isTX);
-                }
-            }
-        }
-
-        private void radio_PanadapterRemoved(Panadapter pan)
-        {
-            Debug.WriteLine($"Panadapter removed: {pan.CenterFreq} Hz");
-        }
-
-        private void radio_PanadapterAdded(Panadapter pan, Waterfall fall)
-        {
-            Debug.WriteLine($"Panadapter added: {pan.CenterFreq} Hz");
-        }
-
-        private void radio_SliceRemoved(Slice slc)
-        {
-            slc.PropertyChanged -= slice_PropertyChanged;
-            Debug.WriteLine($"Slice removed: {slc.Letter}");
-            if (slc.Letter == "B")
-            {
-                // unmute diversity slice
-                var client = activeRadio?.GuiClients.FirstOrDefault();
-                if (client != null)
-                {
-                    var diversitySlice = activeRadio.FindSliceByLetter("D", client.ClientHandle);
-                    if (diversitySlice != null)
-                    {
-                        diversitySlice.Mute = previousDiversityMuteState;
-                    }
-                }
-            }
-            TXStateEvent?.Invoke(slc.Letter, null);
-        }
-
-        private void radio_SliceAdded(Slice slc)
-        {
-            slc.PropertyChanged += slice_PropertyChanged;
-            Debug.WriteLine($"Slice added: {slc.Letter}");
-            if (slc.Letter == "B")
-            {
-                // unmute diversity slice
-                var client = activeRadio?.GuiClients.FirstOrDefault();
-                if (client != null)
-                {
-                    var diversitySlice = activeRadio.FindSliceByLetter("D", client.ClientHandle);
-                    if (diversitySlice != null)
-                    {
-                        previousDiversityMuteState = diversitySlice.Mute;
-                        diversitySlice.Mute = true;
-                    }
-                }
-            }
-            TXStateEvent?.Invoke(slc.Letter, false);
-        }
-
-        private void slice_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-        {
-            if (sender is Slice)
-            {
-                Debug.WriteLine(e.PropertyName);
-                Debug.WriteLine(((Slice)sender).Letter);
-                // TODO - mute D if B was unmuted and vice versa
             }
         }
     }

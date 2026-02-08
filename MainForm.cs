@@ -14,28 +14,26 @@ namespace MidiFlexRadioController
             transceiver.CommandStateEvent += midiController.LightActionButton;
             transceiver.TXStateEvent += midiController.LightSliceTX;
             midiController.CommandHandler += transceiver.ProcessCommand;
-            UpdateStatus(ConnectionStatus.Connecting);
+            UpdateStatus(new ConnectionInfo(ConnectionStatus.Connecting, ""));
             midiController.Setup("DJControl Starlight");
             transceiver.Setup();
         }
 
-        private void Transceiver_TXStateEvent(string sliece, bool isTX)
+        private void UpdateStatus(ConnectionInfo connectionInfo)
         {
-            throw new NotImplementedException();
-        }
-
-        private void UpdateStatus(ConnectionStatus status)
-        {
+            var status = connectionInfo.Status;
             isRunning = status == ConnectionStatus.Connected || status == ConnectionStatus.Connecting;
             if (InvokeRequired)
             {
-                Invoke(() => UpdateStatus(status));
+                Invoke(() => UpdateStatus(connectionInfo));
                 return;
             }
-            StatusLabel.Text = status.ToString();
-            StatusLabel.ForeColor = status == ConnectionStatus.ConnectionFailed ? Color.Red
+            statusLabel.Text = status.ToString();
+            statusLabel.ForeColor = status == ConnectionStatus.ConnectionFailed ? Color.Red
                 : status == ConnectionStatus.Connected ? Color.Green
                 : Color.Black;
+            radioLabel.Text = connectionInfo.RadioLabel;
+
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -45,12 +43,12 @@ namespace MidiFlexRadioController
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            var x = MessageBox.Show("Are you sure you want to really exit ?", "Exit", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            var x = MessageBox.Show("Do you want to stop FlexRadio Midi Controller?", "Exit", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             e.Cancel = x == DialogResult.No;
             if (x == DialogResult.Yes)
             {
-                midiController.Teardown();
                 transceiver.Teardown();
+                midiController.Teardown();                
             }
         }
     }

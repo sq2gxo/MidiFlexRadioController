@@ -17,9 +17,7 @@
         XitOnOff,
         FilterWider,
         FilterNarrower,
-        APF,
-        AutoNotch,
-        NB,
+        APF_ANF,
         WNB,
         Step,
         DVK,
@@ -27,6 +25,7 @@
         BandUp,
         BandDown,
         Mode,
+        Mute
     }
 
     internal record RadioAction(Command TrxCommand, string Param);
