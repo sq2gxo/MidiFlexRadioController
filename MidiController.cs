@@ -18,28 +18,28 @@ namespace MidiFlexRadioController
             { new MidiControl(2, 5), new RadioAction(Command.XitOnOff, "B") },
             { new MidiControl(1, 6), new RadioAction(Command.Diversity, "A") },
             { new MidiControl(2, 6), new RadioAction(Command.ATU, "") },
-            { new MidiControl(1, 7), new RadioAction(Command.CenterSlice, "A") },
-            { new MidiControl(2, 7), new RadioAction(Command.CenterSlice, "B") },
-            { new MidiControl(1, 8), new RadioAction(Command.CenterSlice, "A") },
-            { new MidiControl(2, 8), new RadioAction(Command.CenterSlice, "B") },
+            { new MidiControl(1, 7), new RadioAction(Command.CenterPanadapter, "A") },
+            { new MidiControl(2, 7), new RadioAction(Command.CenterPanadapter, "B") },
+            { new MidiControl(1, 8), new RadioAction(Command.CenterPanadapter, "A") },
+            { new MidiControl(2, 8), new RadioAction(Command.CenterPanadapter, "B") },
 
             { new MidiControl(6, 0), new RadioAction(Command.FilterNarrower, "A") }, // (1) 1 button (HOT CUE active)
             { new MidiControl(6, 1), new RadioAction(Command.FilterWider, "A") },    // (1) 2 button (HOT CUE active)
             { new MidiControl(6, 2), new RadioAction(Command.APF_ANF, "A") },        // (1) 3 button (HOT CUE active)    
-            { new MidiControl(6, 3), new RadioAction(Command.Mute, "A") },           // (1) 4 button (HOT CUE active)
+            { new MidiControl(6, 3), new RadioAction(Command.WNB, "A") },           // (1) 4 button (HOT CUE active)
             { new MidiControl(7, 0), new RadioAction(Command.FilterNarrower, "B") }, // (2) 1 button (HOT CUE active)
             { new MidiControl(7, 1), new RadioAction(Command.FilterWider, "B") },    // (2) 2 button (HOT CUE active)
             { new MidiControl(7, 2), new RadioAction(Command.APF_ANF, "B") },        // (2) 3 button (HOT CUE active)
-            { new MidiControl(7, 3), new RadioAction(Command.Mute, "B") },           // (2) 4 button (HOT CUE active)
+            { new MidiControl(7, 3), new RadioAction(Command.WNB, "B") },           // (2) 4 button (HOT CUE active)
 
-            { new MidiControl(6, 16), new RadioAction(Command.DVK, "1") }, // (1) 1 button (LOOP active)
-            { new MidiControl(6, 17), new RadioAction(Command.DVK, "2") }, // (1) 2 button (LOOP active)
-            { new MidiControl(6, 18), new RadioAction(Command.WNB, "A") }, // (1) 3 button (LOOP active)
-            { new MidiControl(6, 19), new RadioAction(Command.Mute, "A") },// (1) 4 button (LOOP active)
-            { new MidiControl(7, 16), new RadioAction(Command.DVK, "1") }, // (2) 1 button (LOOP active)
-            { new MidiControl(7, 17), new RadioAction(Command.DVK, "2") }, // (2) 2 button (LOOP active)
-            { new MidiControl(7, 18), new RadioAction(Command.WNB, "B") }, // (2) 3 button (LOOP active)
-            { new MidiControl(7, 19), new RadioAction(Command.Mute, "B") },// (2) 4 button (LOOP active)
+            { new MidiControl(6, 16), new RadioAction(Command.AudioBalance, "A") }, // (1) 1 button (LOOP active)
+            { new MidiControl(6, 17), new RadioAction(Command.Mute, "A") }, // (1) 2 button (LOOP active)
+            { new MidiControl(6, 18), new RadioAction(Command.PTT, "") }, // (1) 3 button (LOOP active)
+            { new MidiControl(6, 19), new RadioAction(Command.DVK, "1") },// (1) 4 button (LOOP active)
+            { new MidiControl(7, 16), new RadioAction(Command.AudioBalance, "B") }, // (2) 1 button (LOOP active)
+            { new MidiControl(7, 17), new RadioAction(Command.Mute, "B") }, // (2) 2 button (LOOP active)
+            { new MidiControl(7, 18), new RadioAction(Command.DVK, "2") }, // (2) 3 button (LOOP active)
+            { new MidiControl(7, 19), new RadioAction(Command.DVK, "3") },// (2) 4 button (LOOP active)
 
             { new MidiControl(1, 3), new RadioAction(Command.Mode, BOTH_SLICES) }, // VINYL button - Mode change for both slices
             { new MidiControl(1, 12), new RadioAction(Command.BandUp, "A") }, // left "headphones" button
@@ -136,6 +136,9 @@ namespace MidiFlexRadioController
                     var midiEvent = new MidiEvent(noteOn.Channel, noteOn.NoteNumber, noteOn.Velocity);
                     LightButton(midiEvent);
                     if (midiEvent.Value < 63)
+                    {
+                        CommandHandler?.Invoke(new ControlCommand(action, midiEvent));
+                    } else if (action.TrxCommand == Command.PTT) // handle ptt as momentary button
                     {
                         CommandHandler?.Invoke(new ControlCommand(action, midiEvent));
                     }

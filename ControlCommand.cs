@@ -13,7 +13,7 @@
 
         // Buttons
         Diversity,
-        CenterSlice,
+        CenterPanadapter,
         XitOnOff,
         FilterWider,
         FilterNarrower,
@@ -25,7 +25,9 @@
         BandUp,
         BandDown,
         Mode,
-        Mute
+        Mute,
+        AudioBalance,
+        PTT
     }
 
     internal record RadioAction(Command TrxCommand, string Param);

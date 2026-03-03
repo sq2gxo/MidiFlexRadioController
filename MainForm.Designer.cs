@@ -29,6 +29,7 @@ namespace MidiFlexRadioController
         /// </summary>
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(MainForm));
             statusStrip = new StatusStrip();
             statusLabel = new ToolStripStatusLabel();
             label1 = new Label();
@@ -103,6 +104,7 @@ namespace MidiFlexRadioController
             Controls.Add(label2);
             Controls.Add(label1);
             Controls.Add(statusStrip);
+            Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "MainForm";
             Text = "FlexRadio MIDI Control";
             FormClosing += MainForm_FormClosing;

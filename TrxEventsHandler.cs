@@ -169,6 +169,9 @@ namespace MidiFlexRadioController
                     case "WNBOn":
                         CommandStateEventHandler?.Invoke(new RadioAction(Command.WNB, s.Letter), s.WNBOn);
                         break;
+                    case "AudioPan":
+                        CommandStateEventHandler?.Invoke(new RadioAction(Command.AudioBalance, s.Letter), (s.AudioPan != 50));
+                        break;
                     default:
                         break;
                     }

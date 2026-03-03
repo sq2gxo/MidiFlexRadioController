@@ -75,6 +75,8 @@ namespace MidiFlexRadioController
             API.RadioRemoved += API_RadioRemoved;
             API.ProgramName = "MidiFlexRadioController";
             API.Init();
+            API.Init();
+            API.Init();
         }
 
         internal void Teardown()
@@ -246,7 +248,7 @@ namespace MidiFlexRadioController
                         CommandStateEvent?.Invoke(controlCommand.Action, s.DiversityOn);
                         break;
                     }
-                case Command.CenterSlice:
+                case Command.CenterPanadapter:
                     {
                         var centerFreq = s.Freq;
                         if (sliceMode== "USB")
@@ -315,11 +317,17 @@ namespace MidiFlexRadioController
                         if (txSlice == null)
                         {
                             Debug.WriteLine("Transmit slice not found, ignoring DVK command");
+                            return;
                         }
                         var txMode = txSlice.DemodMode;
                         var isTX = activeRadio.Mox;
                         if (txMode == "USB" || txMode == "LSB")
                         {
+                            if (activeRadio.DVK.Recordings.Find(r => r.Id == dvkIdx && r.DurationMilliseconds > 0) == null)
+                            {
+                                Debug.WriteLine($"Empty DVK recording: {dvkIdx}");
+                                return;
+                            }
                             activeRadio.DVK.SendCommand(new DVKCommand(DVKCommandType.StopPlayback, (uint?)dvkIdx, ""));
                             if (!isTX)
                             {
@@ -328,6 +336,7 @@ namespace MidiFlexRadioController
                         } else if (txMode == "CW")
                         {
                             //do not send message if radio is currently transmitting - cancel request
+                            //activeRadio.GetCWX().Macros
                             activeRadio.GetCWX().ClearBuffer();
                             if (!isTX)
                             {
@@ -369,8 +378,21 @@ namespace MidiFlexRadioController
                 case Command.Mute:
                     s.Mute = !s.Mute;
                     break;
+                case Command.AudioBalance:
+                    if (s.AudioPan == 50)
+                    {
+                        s.AudioPan = s.Letter == "A" ? 0 : 100;
+                    }
+                    else
+                    {
+                        s.AudioPan = 50;
+                    }
+                    break;
                 case Command.WNB:
                     s.WNBOn = !s.WNBOn;
+                    break;
+                case Command.PTT:
+                    activeRadio.Mox = !activeRadio.Mox;
                     break;
                 default:
                     Debug.WriteLine($"Unsupported command: {trxCommand}");
