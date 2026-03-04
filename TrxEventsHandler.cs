@@ -135,13 +135,12 @@ namespace MidiFlexRadioController
                 Slice s = sender as Slice;
                 Debug.WriteLine(e.PropertyName);
                 Debug.WriteLine(s.Letter);
-                // TODO - mute/unmute D if B was unmuted/muted
                 switch (e.PropertyName)
                     {
                     case "Mute":
+                        // mute/unmute Diversity slice if B was unmuted/muted
                         if (s.Letter == "B")
                         {
-                            // unmute diversity slice
                             var client = radio.GuiClients.FirstOrDefault();
                             if (client != null)
                             {

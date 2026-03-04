@@ -2,19 +2,6 @@
 using System.Diagnostics;
 
 
-// slice property changed i dodaniu/usuniecie slice A/B -> XIT, DIV, APF i filtry DSP (i WNB??)
-// to samo przy przełączeniu FN1 FN2
-// A FN1: ch1 note 15
-// A FN2: ch1 note 16
-// B FN1: ch2 note 15
-// B FN2: ch2 note 16
-
-// DVK property changed - podswietlenie makra i abort
-
-// SSB CW - separate width/shift
-// No XIT in SSB
-
-
 namespace MidiFlexRadioController
 {
     internal record ConnectionInfo(ConnectionStatus Status, string RadioLabel);
