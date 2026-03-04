@@ -104,9 +104,10 @@ namespace MidiFlexRadioController
             Controls.Add(label2);
             Controls.Add(label1);
             Controls.Add(statusStrip);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
             Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "MainForm";
-            Text = "FlexRadio MIDI Control";
+            Text = "FlexRadio MIDI Controller by SQ2GXO";
             FormClosing += MainForm_FormClosing;
             Load += MainForm_Load;
             statusStrip.ResumeLayout(false);

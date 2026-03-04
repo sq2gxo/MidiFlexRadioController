@@ -39,7 +39,7 @@ namespace MidiFlexRadioController
             { new MidiControl(7, 16), new RadioAction(Command.AudioBalance, "B") }, // (2) 1 button (LOOP active)
             { new MidiControl(7, 17), new RadioAction(Command.Mute, "B") }, // (2) 2 button (LOOP active)
             { new MidiControl(7, 18), new RadioAction(Command.DVK, "2") }, // (2) 3 button (LOOP active)
-            { new MidiControl(7, 19), new RadioAction(Command.DVK, "3") },// (2) 4 button (LOOP active)
+            { new MidiControl(7, 19), new RadioAction(Command.DVK, "4") },// (2) 4 button (LOOP active)
 
             { new MidiControl(1, 3), new RadioAction(Command.Mode, BOTH_SLICES) }, // VINYL button - Mode change for both slices
             { new MidiControl(1, 12), new RadioAction(Command.BandUp, "A") }, // left "headphones" button
