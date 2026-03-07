@@ -62,8 +62,6 @@ namespace MidiFlexRadioController
             API.RadioRemoved += API_RadioRemoved;
             API.ProgramName = "MidiFlexRadioController";
             API.Init();
-            API.Init();
-            API.Init();
         }
 
         internal void Teardown()
@@ -501,18 +499,21 @@ namespace MidiFlexRadioController
             {
                 if (activeRadio == null)
                 {
+                    this.activeRadio = radio;
+                    this.radioHandler = new TrxEventsHandler(radio, TXStateEvent, CommandStateEvent);
                     if (radio?.Connect() == true)
                     {
                         this.activeRadio = radio;
                         Debug.WriteLine("Connected to radio {radio}.");
-                        StatusEvent?.Invoke(new ConnectionInfo(ConnectionStatus.Connected, $"{radio.Callsign} {radio.Nickname}"));                        
-                        this.activeRadio = radio;
-                        this.radioHandler = new TrxEventsHandler(radio, TXStateEvent, CommandStateEvent);
+                        StatusEvent?.Invoke(new ConnectionInfo(ConnectionStatus.Connected, $"{radio.Callsign} {radio.Nickname}"));                                                                        
                     }
                     else
                     {
                         Debug.WriteLine("Failed to connect to radio.");
                         StatusEvent?.Invoke(new ConnectionInfo(ConnectionStatus.ConnectionFailed, ""));
+                        this.radioHandler.Teardown();
+                        this.radioHandler = null;
+                        this.activeRadio = null;           
                     }
                 }
             }

@@ -30,7 +30,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FlexRadio\FlexLib_API_v4.0.1.39161\FlexLib\FlexLib.csproj" />
+    <ProjectReference Include="..\FlexRadio\FlexLib_API_v4.1.5.39794\FlexLib\FlexLib.csproj" />
+    <ProjectReference Include="..\FlexRadio\FlexLib_API_v4.1.5.39794\UiWpfFramework\UiWpfFramework.csproj" />
+    <ProjectReference Include="..\FlexRadio\FlexLib_API_v4.1.5.39794\Util\Util.csproj" />
+    <ProjectReference Include="..\FlexRadio\FlexLib_API_v4.1.5.39794\Vita\Vita.csproj" />
   </ItemGroup>
 
 </Project>
