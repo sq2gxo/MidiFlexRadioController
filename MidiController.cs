@@ -20,8 +20,6 @@ namespace MidiFlexRadioController
             { new MidiControl(2, 6), new RadioAction(Command.ATU, "") },
             { new MidiControl(1, 7), new RadioAction(Command.CenterPanadapter, "A") },
             { new MidiControl(2, 7), new RadioAction(Command.CenterPanadapter, "B") },
-            { new MidiControl(1, 8), new RadioAction(Command.CenterPanadapter, "A") },
-            { new MidiControl(2, 8), new RadioAction(Command.CenterPanadapter, "B") },
 
             { new MidiControl(6, 0), new RadioAction(Command.FilterNarrower, "A") }, // (1) 1 button (HOT CUE active)
             { new MidiControl(6, 1), new RadioAction(Command.FilterWider, "A") },    // (1) 2 button (HOT CUE active)
