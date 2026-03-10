@@ -1,5 +1,6 @@
 ﻿using Flex.Smoothlake.FlexLib;
 using System.Diagnostics;
+using System.Windows;
 
 
 namespace MidiFlexRadioController
@@ -17,6 +18,7 @@ namespace MidiFlexRadioController
     internal class Transceiver
     {
         private readonly object _connectSyncObj = new();
+        private readonly List<string> stationNames = [];
 
         private readonly List<int> BANDS = [.. new List<int>() { 160, 80, 40, 30, 20, 17, 15, 12, 10, 6 }.OrderBy(x => x)];
         private readonly List<string> BASE_MODES = new List<string>() { "CW", "LSB", "USB" };
@@ -55,6 +57,20 @@ namespace MidiFlexRadioController
         public delegate void TXStateEventHandler(string sliece, bool? isTX);
         public event TXStateEventHandler? TXStateEvent;
 
+        // init station names in constructor
+        internal Transceiver()
+        {
+            var localCompName = System.Environment.GetEnvironmentVariable("COMPUTERNAME");
+            if (localCompName != null)
+            {
+                stationNames.Add(localCompName);
+            }
+            var customStationName = System.Environment.GetEnvironmentVariable("SMARTSDR-STATION-NAME");
+            if (customStationName != null)
+            {
+                stationNames.Add(customStationName);
+            }
+        }
 
         internal void Setup()
         {
@@ -457,21 +473,21 @@ namespace MidiFlexRadioController
         {
             radios.Add(radio);
             Console.WriteLine($"Radio added: {radio.Nickname} {radio.Callsign}");
-            var compName = System.Environment.GetEnvironmentVariable("COMPUTERNAME");
             foreach (var client in radio.GuiClients)
             {
                 string clientInfoMessage = $"Existing GUI Client: {client.Program} {client.Station}";
                 Debug.WriteLine(clientInfoMessage);
-                if (client.Station == compName)
+                if (stationNames.Contains(client.Station))
                 {
                     ActivateRadio(radio);
                 }
+
             }
             radio.GUIClientAdded += (client) =>
             {
                 string clientInfoMessage = $"New GUI Client added: {client.Program} {client.Station} Radio: {radio.Nickname}";
                 Debug.WriteLine(clientInfoMessage);
-                if (client.Station == compName)
+                if (stationNames.Contains(client.Station))
                 {
                     ActivateRadio(radio);
                 }
@@ -480,7 +496,7 @@ namespace MidiFlexRadioController
             {
                 string clientInfoMessage = $"GUI Client removed: {client.Program} {client.Station} Radio: {radio.Nickname}";
                 Debug.WriteLine(clientInfoMessage);
-                if (client.Station == compName)
+                if (stationNames.Contains(client.Station))
                 {
                     DeactivateRadio(radio);
                 }
