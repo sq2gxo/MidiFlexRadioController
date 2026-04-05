@@ -70,6 +70,7 @@ namespace MidiFlexRadioController
             {
                 stationNames.Add(customStationName);
             }
+            stationNames.Add("AetherSDR");
         }
 
         internal void Setup()

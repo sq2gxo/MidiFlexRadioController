@@ -66,6 +66,7 @@ namespace MidiFlexRadioController
 
         public delegate void ControlCommandEventHandler(ControlCommand command);
         public event ControlCommandEventHandler? CommandHandler;
+        public event EventHandler<Exception>? DeviceError;
 
         internal MidiController()
         {
@@ -81,6 +82,7 @@ namespace MidiFlexRadioController
             {
                 throw new Exception($"Input MIDI device '{deviceName}' not found.");
             }
+            inputDevice.ErrorOccurred += OnInputDeviceError;
             inputDevice.EventReceived += OnMidiEventReceived;
             inputDevice.StartEventsListening();
             outputDevice = OutputDevice.GetByName(deviceName);
@@ -97,6 +99,7 @@ namespace MidiFlexRadioController
         {
             if (inputDevice != null)
             {
+                inputDevice.ErrorOccurred -= OnInputDeviceError;
                 inputDevice.EventReceived -= OnMidiEventReceived;
                 inputDevice.StopEventsListening();
                 (inputDevice as IDisposable)?.Dispose();
@@ -109,6 +112,11 @@ namespace MidiFlexRadioController
                 (outputDevice as IDisposable)?.Dispose();
                 outputDevice = null;
             }
+        }
+
+        private void OnInputDeviceError(object? sender, Melanchall.DryWetMidi.Multimedia.ErrorOccurredEventArgs e)
+        {
+            DeviceError?.Invoke(this, e.Exception);
         }
 
         private void OnMidiEventReceived(object? sender, MidiEventReceivedEventArgs e)
@@ -161,11 +169,11 @@ namespace MidiFlexRadioController
             }
             if (slice == "A")
             {
-                outputDevice?.SendEvent(new NoteOnEvent((SevenBitNumber)35, (SevenBitNumber)color) { Channel = (FourBitNumber)1 });                
+                TrySendEvent(new NoteOnEvent((SevenBitNumber)35, (SevenBitNumber)color) { Channel = (FourBitNumber)1 });
             }
             else if (slice == "B")
             {
-                outputDevice?.SendEvent(new NoteOnEvent((SevenBitNumber)35, (SevenBitNumber)color) { Channel = (FourBitNumber)2 });
+                TrySendEvent(new NoteOnEvent((SevenBitNumber)35, (SevenBitNumber)color) { Channel = (FourBitNumber)2 });
             }
         }
 
@@ -182,12 +190,24 @@ namespace MidiFlexRadioController
 
         private void LightButton(MidiControl button, bool on)
         {
-            outputDevice?.SendEvent(new NoteOnEvent((SevenBitNumber)button.Number, on ? SevenBitNumber.MaxValue : SevenBitNumber.MinValue) { Channel = (FourBitNumber)button.Channel });
+            TrySendEvent(new NoteOnEvent((SevenBitNumber)button.Number, on ? SevenBitNumber.MaxValue : SevenBitNumber.MinValue) { Channel = (FourBitNumber)button.Channel });
         }
 
         private void LightButton(MidiEvent midiEvent)
         {
-            outputDevice?.SendEvent(new NoteOnEvent((SevenBitNumber)midiEvent.Number, (SevenBitNumber)midiEvent.Value) { Channel = (FourBitNumber)midiEvent.Channel });
+            TrySendEvent(new NoteOnEvent((SevenBitNumber)midiEvent.Number, (SevenBitNumber)midiEvent.Value) { Channel = (FourBitNumber)midiEvent.Channel });
+        }
+
+        private void TrySendEvent(NoteOnEvent midiEvent)
+        {
+            try
+            {
+                outputDevice?.SendEvent(midiEvent);
+            }
+            catch (Melanchall.DryWetMidi.Multimedia.MidiDeviceException ex)
+            {
+                DeviceError?.Invoke(this, ex);
+            }
         }
     }
 }

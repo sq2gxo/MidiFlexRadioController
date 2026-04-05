@@ -6,6 +6,7 @@ namespace MidiFlexRadioController
         private readonly Transceiver transceiver = new();
         private readonly MidiController midiController = new();
         private bool isRunning = false;
+        private bool _closingDueToError = false;
 
         public MainForm()
         {
@@ -14,8 +15,8 @@ namespace MidiFlexRadioController
             transceiver.CommandStateEvent += midiController.LightActionButton;
             transceiver.TXStateEvent += midiController.LightSliceTX;
             midiController.CommandHandler += transceiver.ProcessCommand;
+            midiController.DeviceError += OnMidiDeviceError;
             UpdateStatus(new ConnectionInfo(ConnectionStatus.Connecting, ""));
-            midiController.Setup("DJControl Starlight");
             transceiver.Setup();
         }
 
@@ -38,17 +39,43 @@ namespace MidiFlexRadioController
 
         private void MainForm_Load(object sender, EventArgs e)
         {
+            try
+            {
+                midiController.Setup("DJControl Starlight");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"MIDI device error: {ex.Message}", "MIDI Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _closingDueToError = true;
+                Close();
+            }
+        }
 
+        private void OnMidiDeviceError(object? sender, Exception ex)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(() => OnMidiDeviceError(sender, ex));
+                return;
+            }
+            if (_closingDueToError) return;
+            MessageBox.Show("MIDI communication failed", "MIDI Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _closingDueToError = true;
+            Close();
         }
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            if (_closingDueToError)
+            {
+                return;
+            }
             var x = MessageBox.Show("Do you want to stop FlexRadio Midi Controller?", "Exit", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             e.Cancel = x == DialogResult.No;
             if (x == DialogResult.Yes)
             {
                 transceiver.Teardown();
-                midiController.Teardown();                
+                midiController.Teardown();
             }
         }
     }
